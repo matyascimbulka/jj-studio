@@ -4,7 +4,8 @@ use anyhow::Result;
 
 // JJ log template for extracting change information
 // Format: change_id\ncommit_id\ndescription\nauthor\ntimestamp\n---\n
-const JJ_LOG_TEMPLATE: &str = "change_id ++ \"\\n\" ++ commit_id ++ \"\\n\" ++ description ++ \"\\n\" ++ author ++ \"\\n\" ++ committer.timestamp() ++ \"\\n---\\n\"";
+// Use coalesce to provide default values for potentially empty fields
+const JJ_LOG_TEMPLATE: &str = "change_id ++ \"\\n\" ++ commit_id ++ \"\\n\" ++ coalesce(description, \"(no description)\") ++ \"\\n\" ++ coalesce(author.name(), \"(unknown)\") ++ \"\\n\" ++ committer.timestamp() ++ \"\\n---\\n\"";
 
 // Limit the number of changes to fetch for performance (prevents UI freezing on large repos)
 const MAX_CHANGES_LIMIT: &str = "100";
@@ -190,27 +191,29 @@ fn parse_jj_log(log_output: &str) -> Result<Vec<JJChange>, String> {
         
         let lines: Vec<&str> = entry.lines().collect();
         if lines.len() >= EXPECTED_FIELDS {
-            // Validate that required fields are not empty
-            for (i, line) in lines.iter().take(EXPECTED_FIELDS).enumerate() {
-                if line.trim().is_empty() {
-                    return Err(format!("Empty field at position {} in log entry", i + 1));
-                }
+            // Basic validation - only skip if critical fields are completely missing
+            let change = JJChange {
+                change_id: lines[0].trim().to_string(),
+                commit_id: lines[1].trim().to_string(),
+                description: lines[2].trim().to_string(),
+                author: lines[3].trim().to_string(),
+                timestamp: lines[4].trim().to_string(),
+            };
+            
+            // Skip entries with empty change_id or commit_id (critical identifiers)
+            if change.change_id.is_empty() || change.commit_id.is_empty() {
+                eprintln!("Warning: Skipping entry with missing critical identifiers");
+                continue;
             }
             
-            let change = JJChange {
-                change_id: lines[0].to_string(),
-                commit_id: lines[1].to_string(),
-                description: lines[2].to_string(),
-                author: lines[3].to_string(),
-                timestamp: lines[4].to_string(),
-            };
             changes.push(change);
         } else if !lines.is_empty() {
             // Log warning for malformed entries instead of silently skipping
             eprintln!(
-                "Skipping malformed log entry with {} fields (expected {})",
+                "Skipping malformed log entry with {} fields (expected {}): {:?}",
                 lines.len(),
-                EXPECTED_FIELDS
+                EXPECTED_FIELDS,
+                lines
             );
         }
     }
